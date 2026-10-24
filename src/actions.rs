@@ -4,6 +4,7 @@
 //! allowing games to define logical actions that can be bound
 //! to various input sources.
 
+use crate::touch_joystick::{TouchJoystick, TouchJoystickInputSet};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -40,6 +41,8 @@ pub enum GameAction {
     LookLeft,
     /// Look right
     LookRight,
+    /// Hold to capture relative mouse motion for looking.
+    MouseLook,
 
     // Actions
     /// Primary action (X button)
@@ -89,6 +92,7 @@ impl GameAction {
             Self::LookDown,
             Self::LookLeft,
             Self::LookRight,
+            Self::MouseLook,
             Self::Primary,
             Self::Secondary,
             Self::LeftShoulder,
@@ -120,6 +124,7 @@ impl GameAction {
             Self::LookDown => "Look Down",
             Self::LookLeft => "Look Left",
             Self::LookRight => "Look Right",
+            Self::MouseLook => "Mouse Look",
             Self::Primary => "Primary Action",
             Self::Secondary => "Secondary Action",
             Self::LeftShoulder => "Left Shoulder",
@@ -291,6 +296,8 @@ impl Default for ActionMap {
         map.bind_key(GameAction::Right, KeyCode::KeyD);
         map.bind_key(GameAction::PageLeft, KeyCode::KeyQ);
         map.bind_key(GameAction::PageRight, KeyCode::KeyE);
+        map.bind_mouse(GameAction::Confirm, MouseButton::Left);
+        map.bind_mouse(GameAction::MouseLook, MouseButton::Right);
 
         map
     }
@@ -349,6 +356,51 @@ impl ActionMap {
         self.gamepad_bindings
             .get(&action)
             .and_then(|buttons| buttons.first().copied())
+    }
+}
+
+/// Host-provided virtual gamepad state, used by on-screen controls and tests.
+///
+/// Values are read by the same action-map path as physical gamepad input.
+#[derive(Debug, Default, Resource)]
+pub struct VirtualGamepadInput {
+    buttons: HashMap<GamepadButton, bool>,
+    axes: HashMap<GamepadAxis, f32>,
+    last_sequence: u64,
+}
+
+impl VirtualGamepadInput {
+    /// Set the current pressed state of a virtual gamepad button.
+    pub fn set_button(&mut self, button: GamepadButton, pressed: bool) -> u64 {
+        self.buttons.insert(button, pressed);
+        self.last_sequence = crate::virtual_input::next_virtual_input_sequence();
+        self.last_sequence
+    }
+
+    /// Set a virtual gamepad axis value in the range `-1.0..=1.0`.
+    pub fn set_axis(&mut self, axis: GamepadAxis, value: f32) -> u64 {
+        self.axes
+            .insert(axis, if value.is_finite() { value.clamp(-1.0, 1.0) } else { 0.0 });
+        self.last_sequence = crate::virtual_input::next_virtual_input_sequence();
+        self.last_sequence
+    }
+
+    /// Whether a virtual gamepad button is currently pressed.
+    #[must_use]
+    pub fn button_pressed(&self, button: GamepadButton) -> bool {
+        self.buttons.get(&button).copied().unwrap_or(false)
+    }
+
+    /// Current virtual gamepad axis value.
+    #[must_use]
+    pub fn axis_value(&self, axis: GamepadAxis) -> f32 {
+        self.axes.get(&axis).copied().unwrap_or(0.0)
+    }
+
+    /// Sequence number of the last host input change applied to this resource.
+    #[must_use]
+    pub fn last_sequence(&self) -> u64 {
+        self.last_sequence
     }
 }
 
@@ -430,6 +482,8 @@ pub fn update_action_state(
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     gamepads: Query<&Gamepad>,
+    virtual_gamepad: Res<VirtualGamepadInput>,
+    touch_joysticks: Query<&TouchJoystick>,
 ) {
     // Reset frame state
     state.reset_frame_state();
@@ -461,46 +515,73 @@ pub fn update_action_state(
             }
         }
 
-        // Check gamepad bindings
+        // Check virtual gamepad buttons, supplied by native on-screen controls.
         if !pressed {
-            for gamepad in gamepads.iter() {
-                // Check button bindings
-                if let Some(buttons) = action_map.gamepad_bindings.get(action) {
-                    for button_type in buttons {
-                        if gamepad.pressed(*button_type) {
-                            pressed = true;
-                            value = 1.0;
-                            break;
-                        }
-                    }
-                }
-
-                // Check axis bindings
-                if !pressed && let Some(axes) = action_map.axis_bindings.get(action) {
-                    for (axis_type, direction, threshold) in axes {
-                        if let Some(axis_value) = gamepad.get(*axis_type) {
-                            let check_value = match direction {
-                                AxisDirection::Positive => axis_value,
-                                AxisDirection::Negative => -axis_value,
-                            };
-
-                            if check_value > *threshold {
-                                pressed = true;
-                                value = value.max(check_value);
-                            }
-                        }
-                    }
-                }
-
+            if let Some(buttons) = action_map.gamepad_bindings.get(action) {
+                pressed = buttons
+                    .iter()
+                    .any(|button| virtual_gamepad.button_pressed(*button));
                 if pressed {
-                    break;
+                    value = 1.0;
                 }
+            }
+        }
+
+        // Check physical gamepad buttons.
+        if !pressed && let Some(buttons) = action_map.gamepad_bindings.get(action) {
+            pressed = gamepads
+                .iter()
+                .any(|gamepad| buttons.iter().any(|button| gamepad.pressed(*button)));
+            if pressed {
+                value = 1.0;
+            }
+        }
+
+        // Check physical and virtual gamepad axes, independent of connected hardware.
+        if !pressed && let Some(axes) = action_map.axis_bindings.get(action) {
+            for (axis_type, direction, threshold) in axes {
+                let check_value = gamepads
+                    .iter()
+                    .filter_map(|gamepad| gamepad.get(*axis_type))
+                    .chain(std::iter::once(virtual_gamepad.axis_value(*axis_type)))
+                    .map(|axis_value| match direction {
+                        AxisDirection::Positive => axis_value,
+                        AxisDirection::Negative => -axis_value,
+                    })
+                    .fold(0.0f32, f32::max);
+
+                if check_value > *threshold {
+                    pressed = true;
+                    value = value.max(check_value);
+                }
+            }
+        }
+
+        // A Bevy touch joystick maps to the same directional actions as a left stick.
+        if !pressed {
+            let joystick_value = touch_joysticks
+                .iter()
+                .map(|joystick| {
+                    let axis = joystick.axis();
+                    match action {
+                        GameAction::Up => axis.y,
+                        GameAction::Down => -axis.y,
+                        GameAction::Left => -axis.x,
+                        GameAction::Right => axis.x,
+                        _ => 0.0,
+                    }
+                })
+                .fold(0.0f32, f32::max);
+            if joystick_value > 0.5 {
+                pressed = true;
+                value = joystick_value;
             }
         }
 
         state.set_pressed(*action, pressed);
         state.set_value(*action, value);
     }
+    crate::virtual_input::acknowledge_virtual_input(virtual_gamepad.last_sequence());
 }
 
 /// Plugin for registering action types and systems.
@@ -509,12 +590,16 @@ pub(crate) fn register_action_types(app: &mut App) {
         .register_type::<ActionMap>()
         .register_type::<ActionState>()
         .init_resource::<ActionMap>()
-        .init_resource::<ActionState>();
+        .init_resource::<ActionState>()
+        .init_resource::<VirtualGamepadInput>();
 }
 
 /// Add action systems to the app.
 pub(crate) fn add_action_systems(app: &mut App) {
-    app.add_systems(PreUpdate, update_action_state);
+    app.add_systems(
+        PreUpdate,
+        update_action_state.after(TouchJoystickInputSet),
+    );
 }
 
 #[cfg(test)]
@@ -527,7 +612,7 @@ mod tests {
         assert!(all_actions.contains(&GameAction::Confirm));
         assert!(all_actions.contains(&GameAction::Cancel));
         assert!(all_actions.contains(&GameAction::Custom4));
-        assert_eq!(all_actions.len(), 24);
+        assert_eq!(all_actions.len(), 25);
     }
 
     #[test]

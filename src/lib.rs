@@ -71,8 +71,11 @@ pub mod plugin;
 pub mod profiles;
 #[cfg(feature = "remapping")]
 pub mod remapping;
+pub mod testing;
+pub mod touch_joystick;
 pub mod touchpad;
 pub mod virtual_cursor;
+pub mod virtual_input;
 #[cfg(feature = "virtual_keyboard")]
 pub mod virtual_keyboard;
 
@@ -80,7 +83,7 @@ pub mod prelude {
     //! Convenient imports for common use cases.
 
     pub use crate::action_modifiers::{ActionModifier, ModifiedActionEvent, ModifierConfig};
-    pub use crate::actions::{ActionMap, ActionState, GameAction};
+    pub use crate::actions::{ActionMap, ActionState, GameAction, VirtualGamepadInput};
     pub use crate::config::{ControllerConfig, ControllerLayout};
     pub use crate::debug::{InputDebugger, InputPlayback, InputRecorder};
     pub use crate::detection::{InputDevice, InputDeviceState};
@@ -94,6 +97,11 @@ pub mod prelude {
         ControllerModel, ControllerProfile, DetectedController, ProfileRegistry,
     };
     pub use crate::touchpad::{TouchpadConfig, TouchpadData, TouchpadGesture};
+    pub use crate::touch_joystick::{
+        JoystickDirection, JoystickSide, TouchJoystick, TouchJoystickEvent, TouchJoystickPlugin,
+        TouchJoystickSettings,
+    };
+    pub use crate::virtual_input::{VirtualAxis, VirtualButton, VirtualDPad, VirtualDPad3D};
 
     #[cfg(feature = "remapping")]
     pub use crate::remapping::{RemapButton, RemapEvent, RemappingState, StartRemapEvent};

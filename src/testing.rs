@@ -23,7 +23,50 @@
 //! ```
 
 use bevy::prelude::*;
+use crate::actions::{ActionState, GameAction};
 use std::collections::HashSet;
+
+/// Action state to wait for while advancing a headless Bevy app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionWaitFor {
+    /// The action is currently held.
+    Pressed,
+    /// The action became pressed in the latest update.
+    JustPressed,
+    /// The action became released in the latest update.
+    JustReleased,
+}
+
+/// Advance an app until an Archie action reaches the requested state.
+///
+/// This creates a deterministic happens-before boundary for tests: the assertion
+/// observes action state only after the Bevy update that processed the input.
+pub fn update_until_action(
+    app: &mut App,
+    action: GameAction,
+    expected: ActionWaitFor,
+    max_updates: usize,
+) -> Result<usize, String> {
+    for update in 1..=max_updates {
+        app.update();
+        let state = app
+            .world()
+            .get_resource::<ActionState>()
+            .ok_or_else(|| "ActionState resource is not installed".to_owned())?;
+        let reached = match expected {
+            ActionWaitFor::Pressed => state.pressed(action),
+            ActionWaitFor::JustPressed => state.just_pressed(action),
+            ActionWaitFor::JustReleased => state.just_released(action),
+        };
+        if reached {
+            return Ok(update);
+        }
+    }
+
+    Err(format!(
+        "timed out after {max_updates} Bevy updates waiting for {action:?} to be {expected:?}"
+    ))
+}
 
 /// A resource for mocking input state in tests.
 ///

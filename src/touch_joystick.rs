@@ -21,7 +21,12 @@
 //! ```
 
 use bevy::prelude::*;
+use bevy::input::InputSystems;
 use serde::{Deserialize, Serialize};
+
+/// Set that updates joystick state after Bevy has processed touch events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub struct TouchJoystickInputSet;
 
 /// Plugin for touch-screen virtual joystick functionality.
 pub struct TouchJoystickPlugin;
@@ -33,9 +38,12 @@ impl Plugin for TouchJoystickPlugin {
             .init_resource::<TouchJoystickSettings>()
             .add_message::<TouchJoystickEvent>()
             .add_systems(
-                Update,
-                (update_touch_joysticks, emit_joystick_events).chain_ignore_deferred(),
-            );
+                PreUpdate,
+                update_touch_joysticks
+                    .after(InputSystems)
+                    .in_set(TouchJoystickInputSet),
+            )
+            .add_systems(Update, emit_joystick_events);
     }
 }
 

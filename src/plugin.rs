@@ -35,10 +35,13 @@ impl ControllerPlugin {
 
 impl Plugin for ControllerPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(crate::touch_joystick::TouchJoystickPlugin);
+
         // Register core types
         crate::config::register_config_types(app);
         crate::detection::register_detection_types(app);
         crate::actions::register_action_types(app);
+        crate::virtual_input::register_virtual_input_types(app);
         crate::icons::register_icon_types(app);
         crate::virtual_cursor::register_virtual_cursor_types(app);
 

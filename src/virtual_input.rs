@@ -21,6 +21,26 @@
 //! ```
 
 use bevy::prelude::*;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static VIRTUAL_INPUT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static VIRTUAL_INPUT_ACKNOWLEDGED: AtomicU64 = AtomicU64::new(0);
+
+/// Allocate a process-wide sequence number for a virtual controller input.
+pub(crate) fn next_virtual_input_sequence() -> u64 {
+    VIRTUAL_INPUT_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1
+}
+
+/// Mark a virtual controller change as processed by Archie action state.
+pub(crate) fn acknowledge_virtual_input(sequence: u64) {
+    VIRTUAL_INPUT_ACKNOWLEDGED.fetch_max(sequence, Ordering::AcqRel);
+}
+
+/// Sequence number through which virtual controller input has reached `ActionState`.
+#[must_use]
+pub fn virtual_input_acknowledged() -> u64 {
+    VIRTUAL_INPUT_ACKNOWLEDGED.load(Ordering::Acquire)
+}
 
 /// A virtual axis that combines two button inputs into a single axis value.
 ///

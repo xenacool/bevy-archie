@@ -13,6 +13,8 @@ keywords = ["bevy", "gamepad", "controller", "input", "gamedev"]
 categories = ["game-development", "game-engines"]
 exclude = ["assets/", "target/", "reference_projects/", "docs/"]
 
+[workspace]
+
 [features]
 default = []
 # Enable icons asset loading
